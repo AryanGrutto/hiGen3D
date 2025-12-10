@@ -7,7 +7,7 @@ os.environ['SPCONV_ALGO'] = 'native'
 import uuid
 import base64
 import threading
-from typing import Optional
+from typing import Optional, List, Literal
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -88,6 +88,14 @@ class SendRequest(BaseModel):
     image_base64: str  # Base64 encoded image
     seed: int = -1
     normal_resolution: int = 768  # Normal map resolution (512, 768, 1024)
+
+
+class SendMultiRequest(BaseModel):
+    """Request model for multi-view mesh generation."""
+    images_base64: List[str]  # List of base64 encoded images (2-3 views)
+    seed: int = -1
+    normal_resolution: int = 768  # Normal map resolution (512, 768, 1024)
+    mode: Literal["multidiffusion", "stochastic"] = "multidiffusion"
 
 
 class SendResponse(BaseModel):
@@ -287,6 +295,86 @@ def generate_mesh(job_id: str, image: Image.Image, params: dict):
         traceback.print_exc()
 
 
+def generate_mesh_multi_view(job_id: str, images: List[Image.Image], params: dict):
+    """Background task to generate a 3D mesh from multiple views."""
+    job = jobs.get(job_id)
+    if not job:
+        return
+    
+    try:
+        job.status = JobStatus.GENERATING
+        
+        # Acquire semaphore slot for GPU access
+        with gpu_semaphore:
+            print(f"Job {job_id}: Acquired GPU slot. Starting multi-view generation with {len(images)} images...")
+            
+            pipeline, predictor = get_pipeline()
+            
+            # Preprocess all images and generate normal maps
+            normal_images = []
+            normal_res = params.get('normal_resolution', 768)
+            
+            for i, image in enumerate(images):
+                processed_image = pipeline.preprocess_image(image)
+                normal_image = predictor(
+                    processed_image,
+                    resolution=normal_res,
+                    match_input_resolution=True,
+                    data_type='object'
+                )
+                normal_images.append(normal_image)
+                print(f"Job {job_id}: Processed view {i+1}/{len(images)}")
+            
+            # Set seed
+            seed = params.get('seed', -1)
+            if seed == -1:
+                seed = np.random.randint(0, MAX_SEED)
+            
+            # Get mode
+            mode = params.get('mode', 'multidiffusion')
+            
+            # Generate mesh with multi-view pipeline
+            outputs = pipeline.run_multi_image(
+                normal_images,
+                seed=seed,
+                formats=["mesh"],
+                preprocess_image=False,
+                mode=mode,
+                sparse_structure_sampler_params={
+                    "steps": 50,
+                    "cfg_strength": 3.0,
+                },
+                slat_sampler_params={
+                    "steps": 6,
+                    "cfg_strength": 3.0,
+                },
+            )
+            
+            generated_mesh = outputs['mesh'][0]
+        
+        # Save mesh (outside GPU semaphore - doesn't need GPU)
+        output_dir = os.path.join(TMP_DIR, job_id)
+        os.makedirs(output_dir, exist_ok=True)
+        mesh_path = os.path.join(output_dir, "mesh.glb")
+        
+        trimesh_mesh = generated_mesh.to_trimesh(transform_pose=True)
+        trimesh_mesh.export(mesh_path)
+        
+        # Update job status
+        job.mesh_path = mesh_path
+        job.status = JobStatus.COMPLETED
+        job.completed_at = datetime.now()
+        
+        print(f"Job {job_id}: Multi-view generation completed successfully.")
+        
+    except Exception as e:
+        job.status = JobStatus.FAILED
+        job.error = str(e)
+        print(f"Job {job_id}: Failed - {e}")
+        import traceback
+        traceback.print_exc()
+
+
 # =============================================================================
 # API Endpoints
 # =============================================================================
@@ -322,6 +410,51 @@ async def send(request: SendRequest):
         job_id=job_id,
         status="pending",
         message="Mesh generation started. Use /status to check progress."
+    )
+
+
+@app.post("/send_multi", response_model=SendResponse)
+async def send_multi(request: SendMultiRequest):
+    """
+    Start a multi-view mesh generation pipeline in the background.
+    Accepts 2-3 images for better 3D reconstruction.
+    Returns a UUID for tracking the process.
+    """
+    # Validate number of images
+    if len(request.images_base64) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 images are required for multi-view generation")
+    if len(request.images_base64) > 3:
+        raise HTTPException(status_code=400, detail="Maximum 3 images are supported for multi-view generation")
+    
+    # Decode all base64 images
+    images = []
+    try:
+        for i, img_base64 in enumerate(request.images_base64):
+            image_data = base64.b64decode(img_base64)
+            image = Image.open(io.BytesIO(image_data)).convert("RGBA")
+            images.append(image)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid image data at index {i}: {str(e)}")
+    
+    # Create job
+    job_id = str(uuid.uuid4())
+    job = Job(job_id)
+    jobs[job_id] = job
+    
+    # Prepare params
+    params = {
+        'seed': request.seed,
+        'normal_resolution': request.normal_resolution,
+        'mode': request.mode,
+    }
+    
+    # Submit to background executor
+    executor.submit(generate_mesh_multi_view, job_id, images, params)
+    
+    return SendResponse(
+        job_id=job_id,
+        status="pending",
+        message=f"Multi-view mesh generation started with {len(images)} images. Use /status to check progress."
     )
 
 
