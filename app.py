@@ -125,6 +125,64 @@ def generate_3d(image, seed=-1,
 
     return normal_image, mesh_path, mesh_path
 
+
+def generate_3d_multi_view(image1, image2, image3, seed=-1,
+                           ss_guidance_strength=3, ss_sampling_steps=50,
+                           slat_guidance_strength=3, slat_sampling_steps=6,
+                           image_resolution=1024, normal_resolution=768,
+                           mode='multidiffusion'):
+    """Generate 3D mesh from multiple view images."""
+    # Collect non-None images
+    images = [img for img in [image1, image2, image3] if img is not None]
+    
+    if len(images) < 2:
+        raise gr.Error("Please provide at least 2 images for multi-view generation")
+    
+    if seed == -1:
+        seed = np.random.randint(0, MAX_SEED)
+    
+    # Preprocess all images
+    processed_images = []
+    normal_images = []
+    for img in images:
+        processed = hi3dgen_pipeline.preprocess_image(img, resolution=image_resolution)
+        processed_images.append(processed)
+        # Generate normal map for each view
+        normal_img = normal_predictor(processed, resolution=normal_resolution, match_input_resolution=True, data_type='object')
+        normal_images.append(normal_img)
+    
+    # Run multi-view pipeline
+    outputs = hi3dgen_pipeline.run_multi_image(
+        normal_images,
+        seed=seed,
+        formats=["mesh"],
+        preprocess_image=False,
+        mode=mode,
+        sparse_structure_sampler_params={
+            "steps": ss_sampling_steps,
+            "cfg_strength": ss_guidance_strength,
+        },
+        slat_sampler_params={
+            "steps": slat_sampling_steps,
+            "cfg_strength": slat_guidance_strength,
+        },
+    )
+    generated_mesh = outputs['mesh'][0]
+    
+    # Save outputs
+    import datetime
+    output_id = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    os.makedirs(os.path.join(TMP_DIR, output_id), exist_ok=True)
+    mesh_path = f"{TMP_DIR}/{output_id}/mesh.glb"
+    
+    # Export mesh
+    trimesh_mesh = generated_mesh.to_trimesh(transform_pose=True)
+    trimesh_mesh.export(mesh_path)
+    
+    # Return first normal image for preview
+    return normal_images[0], mesh_path, mesh_path
+
+
 def convert_mesh(mesh_path, export_format):
     """Download the mesh in the selected format."""
     if not mesh_path:
@@ -181,7 +239,20 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
                         normal_output = gr.Image(label="Normal Bridge", image_mode="RGBA", type="pil")
                         
                 with gr.Tab("Multiple Images"):
-                    gr.Markdown("<div style='text-align: center; padding: 40px; font-size: 24px;'>Multiple Images functionality is coming soon!</div>")
+                    gr.Markdown("Upload 2-3 views of the same object for better 3D reconstruction")
+                    with gr.Row():
+                        multi_image1 = gr.Image(label="View 1 (Front)", image_mode="RGBA", type="pil")
+                        multi_image2 = gr.Image(label="View 2 (Side)", image_mode="RGBA", type="pil")
+                        multi_image3 = gr.Image(label="View 3 (Back, Optional)", image_mode="RGBA", type="pil")
+                    with gr.Row():
+                        multi_normal_output = gr.Image(label="Normal Bridge (View 1)", image_mode="RGBA", type="pil")
+                    with gr.Row():
+                        multi_mode = gr.Radio(
+                            choices=["multidiffusion", "stochastic"],
+                            value="multidiffusion",
+                            label="Multi-view Mode",
+                            info="multidiffusion: averages all views | stochastic: cycles through views"
+                        )
                         
             with gr.Accordion("Advanced Settings", open=False):
                 seed = gr.Slider(-1, MAX_SEED, label="Seed", value=0, step=1)
@@ -200,7 +271,9 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
                     
             with gr.Group():
                 with gr.Row():
-                    gen_shape_btn = gr.Button("Generate Shape", size="lg", variant="primary")
+                    gen_shape_btn = gr.Button("Generate Shape (Single Image)", size="lg", variant="primary")
+                with gr.Row():
+                    gen_multi_shape_btn = gr.Button("Generate Shape (Multi-View)", size="lg", variant="secondary")
                         
         # Right column - Output
         with gr.Column(scale=1):
@@ -220,6 +293,7 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
         outputs=[image_prompt]
     )
     
+    # Single image generation
     gen_shape_btn.click(
         generate_3d,
         inputs=[
@@ -229,6 +303,22 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
             image_resolution, normal_resolution
         ],
         outputs=[normal_output, model_output, download_btn]
+    ).then(
+        lambda: gr.Button(interactive=True),
+        outputs=[download_btn],
+    )
+    
+    # Multi-view generation
+    gen_multi_shape_btn.click(
+        generate_3d_multi_view,
+        inputs=[
+            multi_image1, multi_image2, multi_image3, seed,
+            ss_guidance_strength, ss_sampling_steps,
+            slat_guidance_strength, slat_sampling_steps,
+            image_resolution, normal_resolution,
+            multi_mode
+        ],
+        outputs=[multi_normal_output, model_output, download_btn]
     ).then(
         lambda: gr.Button(interactive=True),
         outputs=[download_btn],

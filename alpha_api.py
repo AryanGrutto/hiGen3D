@@ -87,10 +87,7 @@ jobs: dict[str, Job] = {}
 class SendRequest(BaseModel):
     image_base64: str  # Base64 encoded image
     seed: int = -1
-    ss_guidance_strength: float = 3.0
-    ss_sampling_steps: int = 50
-    slat_guidance_strength: float = 3.0
-    slat_sampling_steps: int = 6
+    normal_resolution: int = 768  # Normal map resolution (512, 768, 1024)
 
 
 class SendResponse(BaseModel):
@@ -232,13 +229,14 @@ def generate_mesh(job_id: str, image: Image.Image, params: dict):
             
             pipeline, predictor = get_pipeline()
             
-            # Preprocess image
-            processed_image = pipeline.preprocess_image(image, resolution=1024)
+            # Preprocess image (uses input image resolution)
+            processed_image = pipeline.preprocess_image(image)
             
-            # Generate normal map
+            # Generate normal map with configurable resolution
+            normal_res = params.get('normal_resolution', 768)
             normal_image = predictor(
                 processed_image,
-                resolution=768,
+                resolution=normal_res,
                 match_input_resolution=True,
                 data_type='object'
             )
@@ -248,19 +246,19 @@ def generate_mesh(job_id: str, image: Image.Image, params: dict):
             if seed == -1:
                 seed = np.random.randint(0, MAX_SEED)
             
-            # Generate mesh
+            # Generate mesh with fixed quality parameters
             outputs = pipeline.run(
                 normal_image,
                 seed=seed,
                 formats=["mesh"],
                 preprocess_image=False,
                 sparse_structure_sampler_params={
-                    "steps": params.get('ss_sampling_steps', 50),
-                    "cfg_strength": params.get('ss_guidance_strength', 3.0),
+                    "steps": 50,
+                    "cfg_strength": 3.0,
                 },
                 slat_sampler_params={
-                    "steps": params.get('slat_sampling_steps', 6),
-                    "cfg_strength": params.get('slat_guidance_strength', 3.0),
+                    "steps": 6,
+                    "cfg_strength": 3.0,
                 },
             )
             
@@ -314,10 +312,7 @@ async def send(request: SendRequest):
     # Prepare params
     params = {
         'seed': request.seed,
-        'ss_guidance_strength': request.ss_guidance_strength,
-        'ss_sampling_steps': request.ss_sampling_steps,
-        'slat_guidance_strength': request.slat_guidance_strength,
-        'slat_sampling_steps': request.slat_sampling_steps,
+        'normal_resolution': request.normal_resolution,
     }
     
     # Submit to background executor
