@@ -85,15 +85,16 @@ def preprocess_image(image):
 
 def generate_3d(image, seed=-1,  
                 ss_guidance_strength=3, ss_sampling_steps=50,
-                slat_guidance_strength=3, slat_sampling_steps=6,):
+                slat_guidance_strength=3, slat_sampling_steps=6,
+                image_resolution=1024, normal_resolution=768):
     if image is None:
         return None, None, None
 
     if seed == -1:
         seed = np.random.randint(0, MAX_SEED)
     
-    image = hi3dgen_pipeline.preprocess_image(image, resolution=1024)
-    normal_image = normal_predictor(image, resolution=768, match_input_resolution=True, data_type='object')
+    image = hi3dgen_pipeline.preprocess_image(image, resolution=image_resolution)
+    normal_image = normal_predictor(image, resolution=normal_resolution, match_input_resolution=True, data_type='object')
 
     outputs = hi3dgen_pipeline.run(
         normal_image,
@@ -184,6 +185,10 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
                         
             with gr.Accordion("Advanced Settings", open=False):
                 seed = gr.Slider(-1, MAX_SEED, label="Seed", value=0, step=1)
+                gr.Markdown("#### Resolution Settings")
+                with gr.Row():
+                    image_resolution = gr.Slider(512, 2048, label="Image Resolution", value=1024, step=256)
+                    normal_resolution = gr.Slider(512, 1024, label="Normal Resolution", value=768, step=128)
                 gr.Markdown("#### Stage 1: Sparse Structure Generation")
                 with gr.Row():
                     ss_guidance_strength = gr.Slider(0.0, 10.0, label="Guidance Strength", value=3, step=0.1)
@@ -220,7 +225,8 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
         inputs=[
             image_prompt, seed,  
             ss_guidance_strength, ss_sampling_steps,
-            slat_guidance_strength, slat_sampling_steps
+            slat_guidance_strength, slat_sampling_steps,
+            image_resolution, normal_resolution
         ],
         outputs=[normal_output, model_output, download_btn]
     ).then(
