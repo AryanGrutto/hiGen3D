@@ -11,6 +11,7 @@ from typing import Optional
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 import torch
 import numpy as np
@@ -115,61 +116,101 @@ class HealthResponse(BaseModel):
 
 
 # =============================================================================
+# Pipeline Storage
+# =============================================================================
+
+hi3dgen_pipeline = None
+normal_predictor = None
+models_loaded = False
+
+
+def load_models():
+    """Load all models into GPU memory. Called once at startup."""
+    global hi3dgen_pipeline, normal_predictor, models_loaded
+    
+    if models_loaded:
+        return
+    
+    with pipeline_init_lock:
+        if models_loaded:
+            return
+            
+        print("=" * 60)
+        print("LOADING MODELS - This may take a few minutes...")
+        print("=" * 60)
+        
+        # Load Hi3DGen pipeline
+        print("[1/2] Loading Hi3DGen pipeline...")
+        hi3dgen_pipeline = Hi3DGenPipeline.from_pretrained(
+            os.path.join(WEIGHTS_DIR, "trellis-normal-v0-1")
+        )
+        hi3dgen_pipeline.cuda()
+        print("[1/2] Hi3DGen pipeline loaded ✓")
+        
+        # Load normal predictor
+        print("[2/2] Loading normal predictor...")
+        try:
+            normal_predictor = torch.hub.load(
+                os.path.join(torch.hub.get_dir(), 'hugoycj_StableNormal_main'),
+                "StableNormal_turbo",
+                yoso_version='yoso-normal-v1-8-1',
+                source='local',
+                local_cache_dir='./weights',
+                pretrained=True
+            )
+        except:
+            normal_predictor = torch.hub.load(
+                "hugoycj/StableNormal",
+                "StableNormal_turbo",
+                trust_repo=True,
+                yoso_version='yoso-normal-v1-8-1',
+                local_cache_dir='./weights'
+            )
+        print("[2/2] Normal predictor loaded ✓")
+        
+        models_loaded = True
+        
+        print("=" * 60)
+        print("ALL MODELS LOADED - Server ready for requests!")
+        print("=" * 60)
+
+
+def get_pipeline():
+    """Get the loaded pipeline. Raises error if not loaded."""
+    if not models_loaded:
+        raise RuntimeError("Models not loaded. Server may still be starting up.")
+    return hi3dgen_pipeline, normal_predictor
+
+
+# =============================================================================
+# FastAPI Lifespan (startup/shutdown)
+# =============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager - loads models on startup.
+    This ensures models are ready BEFORE the server accepts requests.
+    """
+    # Startup: Load models
+    load_models()
+    
+    yield  # Server runs here
+    
+    # Shutdown: Cleanup (optional)
+    print("Shutting down server...")
+
+
+# =============================================================================
 # FastAPI App
 # =============================================================================
 
 app = FastAPI(
     title="Alpha 3D Generation API",
     description="API for generating 3D meshes from images using Hi3DGen",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan  # Attach lifespan handler
 )
-
-
-# =============================================================================
-# Pipeline Initialization (lazy loading)
-# =============================================================================
-
-hi3dgen_pipeline = None
-normal_predictor = None
-
-
-def get_pipeline():
-    """Lazy load the pipeline on first use (thread-safe initialization)."""
-    global hi3dgen_pipeline, normal_predictor
-    
-    # Double-checked locking for thread-safe lazy initialization
-    if hi3dgen_pipeline is None or normal_predictor is None:
-        with pipeline_init_lock:
-            if hi3dgen_pipeline is None:
-                print("Loading Hi3DGen pipeline...")
-                hi3dgen_pipeline = Hi3DGenPipeline.from_pretrained(
-                    os.path.join(WEIGHTS_DIR, "trellis-normal-v0-1")
-                )
-                hi3dgen_pipeline.cuda()
-                print("Hi3DGen pipeline loaded.")
-            
-            if normal_predictor is None:
-                print("Loading normal predictor...")
-                try:
-                    normal_predictor = torch.hub.load(
-                        os.path.join(torch.hub.get_dir(), 'hugoycj_StableNormal_main'),
-                        "StableNormal_turbo",
-                        yoso_version='yoso-normal-v1-8-1',
-                        source='local',
-                        local_cache_dir='./weights',
-                        pretrained=True
-                    )
-                except:
-                    normal_predictor = torch.hub.load(
-                        "hugoycj/StableNormal",
-                        "StableNormal_turbo",
-                        trust_repo=True,
-                        yoso_version='yoso-normal-v1-8-1',
-                        local_cache_dir='./weights'
-                    )
-                print("Normal predictor loaded.")
-    
-    return hi3dgen_pipeline, normal_predictor
 
 
 # =============================================================================
@@ -357,6 +398,7 @@ async def info():
         pass
     
     return {
+        "models_loaded": models_loaded,
         "config": {
             "max_concurrent_jobs": MAX_CONCURRENT_JOBS,
             "available_slots": gpu_semaphore._value,
@@ -397,10 +439,14 @@ async def delete_job(job_id: str):
 if __name__ == "__main__":
     import uvicorn
     
-    # Pre-load pipeline on startup
-    print("Pre-loading models...")
-    get_pipeline()
-    print("Models loaded. Starting server...")
+    # Configuration
+    HOST = os.environ.get("HOST", "0.0.0.0")
+    PORT = int(os.environ.get("PORT", "7860"))
     
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print(f"Starting Alpha API server on {HOST}:{PORT}...")
+    print("Models will be loaded automatically on startup via lifespan handler.")
+    
+    # Note: Models are loaded by the lifespan handler, not here
+    # This ensures they're loaded BEFORE the server accepts any requests
+    uvicorn.run(app, host=HOST, port=PORT)
 
