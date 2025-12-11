@@ -92,7 +92,7 @@ class SendRequest(BaseModel):
 
 class SendMultiRequest(BaseModel):
     """Request model for multi-view mesh generation."""
-    images_base64: List[str]  # List of base64 encoded images (2-3 views)
+    images_base64: List[str]  # List of base64 encoded images (2-4 views)
     seed: int = -1
     normal_resolution: int = 768  # Normal map resolution (512, 768, 1024)
     mode: Literal["multidiffusion", "stochastic"] = "multidiffusion"
@@ -417,14 +417,14 @@ async def send(request: SendRequest):
 async def send_multi(request: SendMultiRequest):
     """
     Start a multi-view mesh generation pipeline in the background.
-    Accepts 2-3 images for better 3D reconstruction.
+    Accepts 2-4 images for better 3D reconstruction.
     Returns a UUID for tracking the process.
     """
     # Validate number of images
     if len(request.images_base64) < 2:
         raise HTTPException(status_code=400, detail="At least 2 images are required for multi-view generation")
-    if len(request.images_base64) > 3:
-        raise HTTPException(status_code=400, detail="Maximum 3 images are supported for multi-view generation")
+    if len(request.images_base64) > 4:
+        raise HTTPException(status_code=400, detail="Maximum 4 images are supported for multi-view generation")
     
     # Decode all base64 images
     images = []
