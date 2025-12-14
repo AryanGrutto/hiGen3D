@@ -97,7 +97,7 @@ class SendMultiRequest(BaseModel):
 
 
 class SendResponse(BaseModel):
-    job_id: str
+    uid: str
     status: str
     message: str
 
@@ -107,7 +107,7 @@ class StatusRequest(BaseModel):
 
 
 class StatusResponse(BaseModel):
-    job_id: str
+    uid: str
     status: str
     mesh_base64: Optional[str] = None
     message: Optional[str] = None
@@ -405,7 +405,7 @@ async def send(request: SendRequest):
     executor.submit(generate_mesh, job_id, image, params)
     
     return SendResponse(
-        job_id=job_id,
+        uid=job_id,
         status="pending",
         message="Mesh generation started. Use /status to check progress."
     )
@@ -450,42 +450,38 @@ async def send_multi(request: SendMultiRequest):
     executor.submit(generate_mesh_multi_view, job_id, images, params)
     
     return SendResponse(
-        job_id=job_id,
+        uid=job_id,
         status="pending",
         message=f"Multi-view mesh generation started with {len(images)} images. Use /status to check progress."
     )
 
 
-@app.post("/status", response_model=StatusResponse)
-async def status(request: StatusRequest):
+@app.get("/status/{uid}")
+async def status(uid: str):
     """
     Check the status of a mesh generation job.
-    Returns the mesh as base64 if completed.
+    Returns mesh_base64 if completed, otherwise just the status.
     """
-    job = jobs.get(request.job_id)
+    job = jobs.get(uid)
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    response = StatusResponse(
-        job_id=job.job_id,
-        status=job.status.value
-    )
-    
     if job.status == JobStatus.COMPLETED and job.mesh_path:
-        # Read mesh and encode as base64
         try:
             with open(job.mesh_path, 'rb') as f:
                 mesh_data = f.read()
-            response.mesh_base64 = base64.b64encode(mesh_data).decode('utf-8')
+            return {
+                "status": job.status.value,
+                "mesh_base64": base64.b64encode(mesh_data).decode('utf-8')
+            }
         except Exception as e:
-            response.status = "failed"
-            response.message = f"Failed to read mesh: {str(e)}"
+            return {"status": "error", "message": f"Failed to read mesh: {str(e)}"}
     
-    elif job.status == JobStatus.FAILED:
-        response.message = job.error
+    if job.status == JobStatus.FAILED:
+        return {"status": job.status.value, "message": job.error}
     
-    return response
+    return {"status": job.status.value}
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -555,7 +551,7 @@ async def delete_job(job_id: str):
         output_dir = os.path.dirname(job.mesh_path)
         shutil.rmtree(output_dir, ignore_errors=True)
     
-    return {"status": "deleted", "job_id": job_id}
+    return {"status": "deleted", "uid": job_id}
 
 
 # =============================================================================
