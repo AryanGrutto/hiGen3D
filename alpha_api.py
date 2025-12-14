@@ -61,10 +61,9 @@ pipeline_init_lock = threading.Lock()
 
 class JobStatus(str, Enum):
     PENDING = "pending"
-    GENERATING = "generating"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
+    GENERATING = "meshing"
+    COMPLETED = "meshReady"
+    FAILED = "error"
 
 class Job:
     def __init__(self, job_id: str):
@@ -78,7 +77,6 @@ class Job:
 
 # In-memory job storage (use Redis/DB for production)
 jobs: dict[str, Job] = {}
-
 
 # =============================================================================
 # Request/Response Models
