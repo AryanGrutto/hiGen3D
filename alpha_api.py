@@ -110,7 +110,7 @@ class StatusResponse(BaseModel):
     job_id: str
     status: str
     mesh_base64: Optional[str] = None
-    error: Optional[str] = None
+    message: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -480,10 +480,10 @@ async def status(request: StatusRequest):
             response.mesh_base64 = base64.b64encode(mesh_data).decode('utf-8')
         except Exception as e:
             response.status = "failed"
-            response.error = f"Failed to read mesh: {str(e)}"
+            response.message = f"Failed to read mesh: {str(e)}"
     
     elif job.status == JobStatus.FAILED:
-        response.error = job.error
+        response.message = job.error
     
     return response
 
