@@ -398,11 +398,13 @@ async def send(request: SendRequest):
     # Submit to background executor
     executor.submit(generate_mesh, job_id, image, params)
     
-    return SendResponse(
+    response =  SendResponse(
         uid=job_id,
         status="meshing",
         message="Mesh generation started. Use /status to check progress."
     )
+
+    return JSONResponse(response.model_dump(), status_code=200)
 
 
 @app.post("/send_multi", response_model=SendResponse)
@@ -459,23 +461,28 @@ async def status(uid: str):
     job = jobs.get(uid)
     
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        return JSONResponse({"status": "error", "message": "Job not found"}, status_code=404)
     
     if job.status == JobStatus.COMPLETED and job.mesh_path:
         try:
             with open(job.mesh_path, 'rb') as f:
                 mesh_data = f.read()
-            return {
+            resp = {
                 "status": job.status.value,
                 "mesh_base64": base64.b64encode(mesh_data).decode('utf-8')
             }
+            return JSONResponse(resp, status_code=200)
         except Exception as e:
-            return {"status": "error", "message": f"Failed to read mesh: {str(e)}"}
-    
+            resp = {"status": "error", "message": f"Failed to read mesh: {str(e)}"}
+            return JSONResponse(resp, status_code=500)
     if job.status == JobStatus.FAILED:
-        return {"status": job.status.value, "message": job.error}
-    
-    return {"status": job.status.value}
+        resp = {"status": "error", "message": job.error}
+        return JSONResponse(resp, status_code=500)
+
+    resp = {"status": job.status.value}
+
+    return JSONResponse(resp, status_code=200)
+
 
 
 @app.get("/health", response_model=HealthResponse)
