@@ -459,7 +459,7 @@ async def status(uid: str):
     job = jobs.get(uid)
     
     if not job:
-        raise HTTPException(status_code=404, status="error", message="Job not found")
+        raise HTTPException(status_code=404, detail="Job not found")
     
     if job.status == JobStatus.COMPLETED and job.mesh_path:
         try:
