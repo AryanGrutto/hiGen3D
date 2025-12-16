@@ -60,7 +60,7 @@ pipeline_init_lock = threading.Lock()
 # =============================================================================
 
 class JobStatus(str, Enum):
-    PENDING = "pending"
+    PENDING = "meshing"
     GENERATING = "meshing"
     COMPLETED = "meshReady"
     FAILED = "error"
