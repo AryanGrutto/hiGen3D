@@ -101,13 +101,7 @@ class SendResponse(BaseModel):
     status: str
     message: str
 
-
-class StatusRequest(BaseModel):
-    job_id: str
-
-
 class StatusResponse(BaseModel):
-    uid: str
     status: str
     mesh_base64: Optional[str] = None
     message: Optional[str] = None
@@ -406,7 +400,7 @@ async def send(request: SendRequest):
     
     return SendResponse(
         uid=job_id,
-        status="pending",
+        status="meshing",
         message="Mesh generation started. Use /status to check progress."
     )
 
